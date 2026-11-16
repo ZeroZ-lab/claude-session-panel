@@ -83,7 +83,7 @@ test('the trend steps by turn, says what grew since the last one, and draws the 
   expect(await has(ui, /┄{3,}/)).toMatch(/┄/)
   expect(await has(ui, /^最高 /)).toBe('最高 160k')
 
-  await ui.press({ key: 'grain-turn' })
+  await ui.press({ key: 'trend-grain' })
   expect(await has(ui, /^2 轮 · 现在 120k/)).toMatch(/2 轮/)
   await ui.unmount()
 })
@@ -105,7 +105,7 @@ test('a ship waiting on someone comes first, with its tokens; many ships fall in
   await clock.advance(6_000)
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await has(ui, /^1 等待处理 · 2 执行中 · 1 已返航$/)).toBe('1 等待处理 · 2 执行中 · 1 已返航')
+  expect(await has(ui, /^1 等待处理 · 2 执行中 · 1 完成$/)).toBe('1 等待处理 · 2 执行中 · 1 完成')
   expect(await has(ui, /^需要处理 · 1$/)).toBe('需要处理 · 1')
   expect(await has(ui, /^运行中 · 2$/)).toBe('运行中 · 2')
   expect(await has(ui, /^已结束 · 1$/)).toBe('已结束 · 1')

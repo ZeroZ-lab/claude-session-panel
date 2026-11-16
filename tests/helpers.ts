@@ -58,9 +58,13 @@ export const world = (on: On, readings: number[] = [65_000]) => {
   let i = 0
   let now = readings[0] ?? 0
   on('ui.open', () => ((seen.opens += 1), { value: { isPlaced: true } }))
-  on('ui.panes', () => ({ value: [] }))
+  // The panes a surface shows: none, unless a test places this one.
+  const panes = { list: [] as { id: string; title: string; isShown: boolean; isFocused: boolean; isPlaced: boolean }[] }
+  on('ui.panes', () => ({ value: panes.list }))
   on('command.register', (_, e) => ({ value: { command: e.name } }))
-  on('session.root', () => ({ value: '/Users/someone/work/app' }))
+  // Where the session runs, and the repository's top folder: a test may start it in a subfolder.
+  const place = { root: '/Users/someone/work/app', top: '/Users/someone/work/app' }
+  on('session.root', () => ({ value: place.root }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.version', () => ({ value: { version: '2.1.325' } }))
   const turns = { turn: 3 }
@@ -100,10 +104,13 @@ export const world = (on: On, readings: number[] = [65_000]) => {
       },
     } as never
   })
-  on('process.run', (_, e) => ({
+  // Every command the plugin ran, by its arguments.
+  const runs: string[][] = []
+  on('process.run', (_, e) => (runs.push([...e.argv]), {
     value: {
       exitCode: 0,
-      stdout: e.argv.includes('status') ? STATUS : e.argv.includes('diff') ? NUMSTAT : 'true\n',
+      stdout: e.argv.includes('status') ? STATUS : e.argv.includes('diff') ? NUMSTAT
+        : e.argv.includes('--show-toplevel') ? `${place.top}\n` : 'true\n',
       stderr: '',
       isStdoutTruncated: false,
       isStderrTruncated: false,
@@ -121,12 +128,13 @@ export const world = (on: On, readings: number[] = [65_000]) => {
   const roster: { id: string; status: string; type: string; description: string }[] = []
   on('agent.list', () => ({ value: roster }) as never)
   // Two of the changed files were written in this session, the rest before it began.
+  const written = { paths: ['/Users/someone/work/app/hooks/register.tsx', '/Users/someone/work/app/types/new file.ts'] }
   on('fs.stat', (_, e) => {
     const path = (e as { path?: string }).path ?? ''
-    const isNew = path.endsWith('register.tsx') || path.endsWith('new file.ts')
+    const isNew = written.paths.includes(path)
     return { value: { kind: 'file', size: 1, mtimeMs: isNew ? 2_000 : 500, isLink: false } } as never
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   // Lets work a call started finish before the next, as the seconds between real requests do.
-  return { clock, seen, roster, turns, settle: () => clock.advance(0) }
+  return { clock, seen, roster, turns, place, panes, runs, written, settle: () => clock.advance(0) }
 }

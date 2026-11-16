@@ -43,6 +43,8 @@ export type Entry = {
   error: string
   /** Where the tool comes from: '' built in, `mcp:<server>` for an MCP server's, `skill` for a skill. */
   source: string
+  /** When it began, by the session's clock. */
+  startedAt: number
 }
 
 export type Totals = { tools: number; skills: number }
@@ -164,11 +166,11 @@ declare module 'claude-code' {
 
       ships: Shaped<Ship[]>
       log: Shaped<Entry[]>
-      totals: Totals
+      totals: Shaped<Totals>
       /** The animation's frame, moved each second while something runs. */
       tick: number
 
-      env: Env | null
+      env: Shaped<Env | null>
       ctx: Shaped<Ctx | null>
       connectors: Shaped<Connector[]>
       outputs: Shaped<Output[]>

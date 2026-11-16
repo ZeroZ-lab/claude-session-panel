@@ -16,7 +16,7 @@ test('the overview page shows the desktop overview, on every surface', async ($,
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await has(ui, /^会话$/)).toMatch(/^会话$/)
-    expect(await has(ui, /app · main · 有未提交的改动/)).toMatch(/app · main/)
+    expect(await has(ui, /^app · main\*$/)).toMatch(/app · main/)
     // Context
     expect(await has(ui, /已用 65k \/ 200k/)).toMatch(/65k/)
     expect(await has(ui, /^消息$/)).toBe('消息')
@@ -26,17 +26,19 @@ test('the overview page shows the desktop overview, on every surface', async ($,
     // Changes: parsed from NUL-ended fields, a rename's old path skipped, a new directory one entry;
     // this session's apart from what was there before it began
     expect(await has(ui, /^工作区改动$/)).toBe('工作区改动')
-    expect(await has(ui, /本次会话 2 项 · 共 4 项/)).toMatch(/本次会话 2 项/)
+    expect(await has(ui, /本次 2 项 · 另有 2 项在会话前/)).toMatch(/本次 2 项/)
     expect(await has(ui, /灰色的是会话开始前就有的改动/)).toMatch(/会话开始前/)
     // How to switch pages, while the pane does not hold the keyboard
-    expect(await has(ui, /ctrl\+x tab 聚焦面板/)).toMatch(/ctrl\+x tab/)
+    // (terminal keys: another surface is not told them)
+    if (surface === 'terminal') expect(await has(ui, /ctrl\+x tab 聚焦面板/)).toMatch(/ctrl\+x tab/)
+    else expect(await lacks(ui, /ctrl\+x tab/)).toBe(true)
     expect(await has(ui, /^register\.tsx$/)).toBe('register.tsx')
     expect(await has(ui, /^new file\.ts$/)).toBe('new file.ts')
     expect(await has(ui, /^笔记\.md$/)).toBe('笔记.md')
     expect(await lacks(ui, /old\.md/)).toBe(true)
     expect(await has(ui, /^notes\/$/)).toBe('notes/')
     // Connectors, environment
-    expect(await has(ui, /2 个已连接/)).toMatch(/2 个/)
+    expect(await has(ui, /2 个 · 3 个工具/)).toMatch(/2 个/)
     expect(await has(ui, /claude\.ai Gmail/)).toMatch(/Gmail/)
     expect(await has(ui, /main ↑2 ↓1/)).toMatch(/↑2/)
     expect(await has(ui, /acme\/app/)).toMatch(/acme/)
@@ -76,7 +78,8 @@ test('a subagent flies, reports its calls and lands; the log names it', async ($
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await has(ui, /Bash git status/)).toMatch(/git status/)
-  expect(await has(ui, /Explore · 搜索状态栏实现/)).toMatch(/搜索/)
+  expect(await has(ui, /^搜索状态栏实现$/)).toBe('搜索状态栏实现')
+  expect(await has(ui, /^Explore$/)).toBe('Explore')
   await ui.press({ key: 'page-log' })
   expect(await has(ui, /工具 1 · 技能 0/)).toMatch(/工具 1/)
   expect(await has(ui, /^Alpha$/)).toBe('Alpha')
@@ -85,7 +88,7 @@ test('a subagent flies, reports its calls and lands; the log names it', async ($
   await $.turn.complete(done('a1'))
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await after.press({ key: 'page-fleet' })
-  expect(await has(after, /1 已返航/)).toMatch(/已返航/)
+  expect(await has(after, /1 完成/)).toMatch(/完成/)
   await after.unmount()
 })
 
@@ -102,7 +105,7 @@ test('a subagent that errors is lost; one that ended before it was listed lands 
   await $.agent.spawn(spawn('two'))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await has(ui, /1 已返航 · 1 失联/)).toMatch(/失联/)
+  expect(await has(ui, /1 完成 · 1 出错/)).toMatch(/出错/)
   expect(await lacks(ui, /执行中/)).toBe(true)
   await ui.unmount()
 })
@@ -123,7 +126,7 @@ test('a ship the roster stops listing lands only after it has been missing a whi
 
   await clock.advance(25_000)
   ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await has(ui, /1 已返航/)).toMatch(/已返航/)
+  expect(await has(ui, /1 完成/)).toMatch(/完成/)
   await ui.unmount()
 })
 
@@ -166,7 +169,7 @@ test('callsigns stay unique, and the log keeps the callsign a call was made unde
   await $.agent.spawn(spawn('third'))
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await has(ui, /2 执行中 · 1 已返航/)).toMatch(/2 执行中/)
+  expect(await has(ui, /2 执行中 · 1 完成/)).toMatch(/2 执行中/)
   await ui.unmount()
 })
 
@@ -259,7 +262,7 @@ test('a short pane gives each ship fewer lines', async ($, on) => {
   })
   // One line a ship: the task sits beside the callsign; no type line, no action line.
   expect(await has(short, /^搜索状态栏相关实现$/)).toBe('搜索状态栏相关实现')
-  expect(await lacks(short, /Explore · /)).toBe(true)
+  expect(await lacks(short, /^Explore$/)).toBe(true)
   await short.unmount()
 })
 
@@ -287,7 +290,7 @@ test('a compaction is listed once, and a later drop still is', async ($, on) => 
   expect(await has(ui, /^压缩$/)).toBe('压缩')
   expect(await has(ui, /^自动 · 150k → 140k$/)).toBe('自动 · 150k → 140k')
   expect(await has(ui, /^回收 10k$/)).toBe('回收 10k')
-  expect(await has(ui, /^变小$/)).toBe('变小')
+  expect(await has(ui, /^回落$/)).toBe('回落')
   expect(await has(ui, /可能清理了旧工具结果/)).toMatch(/旧工具结果/)
   expect(await has(ui, /^回收 100k$/)).toBe('回收 100k')
   expect(await has(ui, /^✂$/)).toBe('✂')
@@ -331,7 +334,7 @@ test('a jump is named after the call whose result brought it in', async ($, on) 
   expect(await has(ui, /^Read big\.log$/)).toBe('Read big.log')
   expect(await has(ui, /^\+58k$/)).toBe('+58k')
   expect(await has(ui, /^▲$/)).toBe('▲')
-  await ui.press({ key: 'mode-delta' })
+  await ui.press({ key: 'trend-mode' })
   expect(await has(ui, /最大变化 58k/)).toMatch(/58k/)
   await ui.unmount()
 })

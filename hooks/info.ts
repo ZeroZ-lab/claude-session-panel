@@ -8,7 +8,7 @@ import { baseName, clip, homeShort, same, shortTokens } from './text'
 // The overview: where the session runs, how full its context is and how that
 // moved, which connectors it has, what it made, and what it changed.
 
-export const env = atom({ plugin: 'session-panel', key: 'env' } as const, null)
+export const env = atom({ plugin: 'session-panel', key: 'env' } as const, null, { shape: 'env-1' })
 export const ctx = atom({ plugin: 'session-panel', key: 'ctx' } as const, null, { shape: 'ctx-2' })
 export const connectors = atom({ plugin: 'session-panel', key: 'connectors' } as const, [], { shape: 'connectors-1' })
 export const outputs = atom({ plugin: 'session-panel', key: 'outputs' } as const, [], { shape: 'outputs-1' })
@@ -25,6 +25,8 @@ const MAX_OUTPUTS = 30
 const MAX_CHANGES_KEPT = 30
 // How many changed entries are looked at to tell this session's from earlier ones.
 const MAX_CHANGES_STATED = 200
+// How many files are looked at at once.
+const STAT_BATCH = 20
 const MAX_SAMPLES = 200
 const MAX_EVENTS = 40
 // The per-category estimate is worked out on this machine: often enough to
@@ -39,7 +41,7 @@ export const CHART_ROWS = 6
 export const BLOCKS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const
 export const EVENT_LOOK = {
   compact: { glyph: '✂', color: 'success', name: '压缩' },
-  drop: { glyph: '↓', color: 'success', name: '变小' },
+  drop: { glyph: '↓', color: 'success', name: '回落' },
   jump: { glyph: '▲', color: 'warning', name: '突增' },
   model: { glyph: '⇄', color: 'suggestion', name: '切换模型' },
   skill: { glyph: '✦', color: 'suggestion', name: '技能' },
@@ -50,6 +52,7 @@ export const CATEGORY_NAMES: Record<string, string> = {
   'System prompt': '系统提示',
   'System tools': '系统工具',
   'MCP tools': 'MCP 工具',
+  'MCP server instructions': 'MCP 服务器说明',
   'Memory files': '记忆文件',
   'Custom agents': '自定义代理',
   'Skills': '技能',
@@ -57,6 +60,25 @@ export const CATEGORY_NAMES: Record<string, string> = {
 export const LIMIT_NAMES: Record<string, string> = { five_hour: '5 小时限额', seven_day: '7 天限额' }
 // The rows /context lists that the conversation itself fills; every other used row is carried on each request.
 const CONVERSATION_ROWS = new Set(['Messages', 'Summarized conversation', 'Conversation'])
+
+// Colors a part takes when /context gave it one an earlier part already has.
+const SPARE_COLORS = ['claude', 'suggestion', 'merged', 'planMode', 'ide', 'permission', 'remember', 'autoAccept', 'warning']
+
+/**
+ * The used rows of /context, each with a color no other row has, so the bar
+ * and its legend can be told apart. Rows keep /context's order, and so the
+ * same rows always get the same colors.
+ */
+const usedRows = (rows: readonly { name: string; tokens: number; color: string; kind: string }[]): Category[] => {
+  const taken = new Set<string>()
+  return rows
+    .filter(row => row.kind === 'used' && row.tokens > 0)
+    .map(row => {
+      const color = taken.has(row.color) ? (SPARE_COLORS.find(one => !taken.has(one)) ?? row.color) : row.color
+      taken.add(color)
+      return { name: row.name, tokens: row.tokens, color }
+    })
+}
 
 /** Where a tool comes from, as the log and the trend tag it. */
 export const sourceOf = (tool: string): string =>
@@ -75,6 +97,12 @@ let ctxRun = 0
 let ctxWritten = 0
 let isSampling = false
 let isSamplePending = false
+let isPendingDetailed = false
+let isEnvRunning = false
+// The top of the repository each session folder is in: git names changed files from there.
+const tops = new Map<string, string>()
+// Files known to be this session's, by when the session began and the path: a later write keeps them so.
+const sessionFiles = new Set<string>()
 let pendingCause: { label: string; source: string; size: number } = { label: '', source: '', size: 0 }
 // The main conversation's last finished tool call: what the next reading's growth came from.
 let lastTool = ''
@@ -86,8 +114,6 @@ let isCompactNoted = false
 let lastParts: Category[] = []
 let lastBreakdownAt = 0
 let beat = 0
-// When the session began: it does not change, so it is read once.
-let sessionStartedAt = 0
 
 /** Runs git in `cwd`; null when it fails, times out, or this is not a repository. */
 async function git($: EngineInterface, cwd: string, args: readonly string[]): Promise<string | null> {
@@ -144,13 +170,43 @@ const addLineCounts = (files: Change[], out: string) => {
   }
 }
 
+/** The repository's top folder, `''` outside one. Asked once per folder that answers. */
+async function topOf($: EngineInterface, root: string): Promise<string> {
+  const known = tops.get(root)
+  if (known !== undefined) return known
+  const out = await git($, root, ['rev-parse', '--show-toplevel'])
+  const top = out?.trim() ?? ''
+  if (top !== '') tops.set(root, top)
+  return top
+}
+
+/** Whether a surface draws the pane now: git and the file reads wait while nobody can see them. */
+async function isPaneSeen($: EngineInterface): Promise<boolean> {
+  const panes = await $.ui.panes().catch(() => undefined)
+  // Nothing to ask: work as before.
+  if (panes === undefined) return true
+  return panes.some(pane => pane.id === 'session-panel' && pane.isPlaced && pane.isShown)
+}
+
 export async function refreshEnv($: EngineInterface) {
+  // One at a time: git may take seconds in a big repository.
+  if (isEnvRunning) return
+  isEnvRunning = true
+  try {
+    await readEnv($)
+  } finally {
+    isEnvRunning = false
+  }
+}
+
+async function readEnv($: EngineInterface) {
   const run = ++envRun
   // Cleared first: an edit while this runs marks it again for the next one.
   isChangesStale = false
   const root = await $.session.root()
   const [startedAt, model, version, repo, status] = await Promise.all([
-    sessionStartedAt > 0 ? sessionStartedAt : $.session.usage().then(usage => (sessionStartedAt = usage.startedAt)).catch(() => 0),
+    // Read each time: /clear starts the session's count again.
+    $.session.usage().then(usage => usage.startedAt).catch(() => 0),
     $.session.model().catch(() => ''),
     $.session.version().then(v => v.version).catch(() => ''),
     $.session.repo().catch(() => null),
@@ -163,14 +219,26 @@ export async function refreshEnv($: EngineInterface) {
     const numstat = await git($, root, ['diff', '-z', '--numstat', '--no-renames', 'HEAD'])
     if (numstat !== null) addLineCounts(state.files, numstat)
   }
-  // A status that failed is not proof of no repository: ask git plainly.
-  const isRepo = state !== null || (await git($, root, ['rev-parse', '--is-inside-work-tree'])) !== null
+  // git names files from the repository's top, which a session started in a subfolder is not.
+  const top = await topOf($, root)
+  // A status that failed is not proof of no repository: the top answering is.
+  const isRepo = state !== null || top !== ''
   // A file written since the session began is this session's change; the rest were there before.
-  if (state !== null && startedAt > 0) {
-    await Promise.all(state.files.slice(0, MAX_CHANGES_STATED).map(async file => {
-      const stat = await $.fs.stat(`${root}/${file.path.replace(/\/$/, '')}`).catch(() => undefined)
-      file.isSession = stat !== undefined && stat.mtimeMs >= startedAt
-    }))
+  if (state !== null && startedAt > 0 && top !== '') {
+    const looked = state.files.slice(0, MAX_CHANGES_STATED)
+    for (let i = 0; i < looked.length; i += STAT_BATCH) {
+      await Promise.all(looked.slice(i, i + STAT_BATCH).map(async file => {
+        const key = `${startedAt}:${file.path}`
+        if (sessionFiles.has(key)) {
+          file.isSession = true
+          return
+        }
+        const stat = await $.fs.stat(`${top}/${file.path.replace(/\/$/, '')}`).catch(() => undefined)
+        file.isSession = stat !== undefined && stat.mtimeMs >= startedAt
+        if (file.isSession) sessionFiles.add(key)
+      }))
+    }
+    if (sessionFiles.size > 2_000) sessionFiles.clear()
   }
 
   if (run < envWritten) return
@@ -211,7 +279,7 @@ export async function refreshCtx($: EngineInterface, withBreakdown: boolean) {
 
   const previous = await read($, ctx)
   const breakdown = usage.context.breakdown
-  const used = (breakdown?.categories ?? []).filter(row => row.kind === 'used' && row.tokens > 0)
+  const used = usedRows(breakdown?.categories ?? [])
   const serverTokens = new Map<string, number>()
   // Older engines may leave the detail lists out: read them as empty.
   const mcpTools: readonly { serverName: string; tokens: number }[] = breakdown?.mcpTools ?? []
@@ -282,10 +350,19 @@ export async function refreshAll($: EngineInterface) {
   ])
 }
 
-/** Every 5 s: the context; every 15 s, or soon after an edit: git; every minute: the connectors. */
+/**
+ * Every 5 s: the context; every 15 s, or soon after an edit: git; every
+ * minute: the connectors. While no surface shows the pane, only the free
+ * reading of the context runs, and git waits until it is seen again.
+ */
 export async function tickInfo($: EngineInterface) {
   beat += 1
-  await refreshCtx($, beat % 6 === 0).catch(() => {})
+  const isSeen = await isPaneSeen($)
+  await refreshCtx($, isSeen && beat % 6 === 0).catch(() => {})
+  if (!isSeen) {
+    isChangesStale = true
+    return
+  }
   if (isChangesStale || beat % 3 === 0) await refreshEnv($).catch(() => {})
   if (beat % 12 === 0) await refreshConnectors($).catch(() => {})
 }
@@ -315,9 +392,7 @@ async function takeReading($: EngineInterface, cause: Cause, withBreakdown: bool
     const detailed = await $.session.usage({ breakdown: 'summary' }).catch(() => undefined)
     const rows = detailed?.context.breakdown?.categories
     if (rows !== undefined) {
-      lastParts = rows
-        .filter(row => row.kind === 'used' && row.tokens > 0)
-        .map(row => ({ name: row.name, tokens: row.tokens, color: row.color }))
+      lastParts = usedRows(rows)
       lastBreakdownAt = at
     }
   }
@@ -362,6 +437,8 @@ export async function sample($: EngineInterface, cause: Cause, withBreakdown = f
   if (isSampling) {
     isSamplePending = true
     pendingCause = cause
+    // A detailed reading asked for while one ran stays detailed.
+    isPendingDetailed ||= withBreakdown
     return
   }
   isSampling = true
@@ -372,7 +449,9 @@ export async function sample($: EngineInterface, cause: Cause, withBreakdown = f
   }
   if (isSamplePending) {
     isSamplePending = false
-    void sample($, pendingCause).catch(() => {})
+    const isDetailed = isPendingDetailed
+    isPendingDetailed = false
+    void sample($, pendingCause, isDetailed).catch(() => {})
   }
 }
 
@@ -449,7 +528,7 @@ export async function onTurnEnd($: EngineInterface, model: string) {
 
 export async function onCompacted($: EngineInterface, trigger: string, before?: number, after?: number) {
   isCompactNoted = true
-  const kind = trigger === 'auto' ? '自动' : '手动'
+  const kind = trigger === 'auto' ? '自动' : trigger === 'plugin' ? '插件' : '手动'
   await addEvent($, {
     ...(await eventNow($)),
     kind: 'compact',

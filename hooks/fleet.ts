@@ -9,8 +9,8 @@ import { clip } from './text'
 // And the call log: the session's recent tool calls and skills.
 
 export const ships = atom({ plugin: 'session-panel', key: 'ships' } as const, [], { shape: 'ships-2' })
-export const log = atom({ plugin: 'session-panel', key: 'log' } as const, [], { shape: 'log-3' })
-export const totals = atom({ plugin: 'session-panel', key: 'totals' } as const, { tools: 0, skills: 0 })
+export const log = atom({ plugin: 'session-panel', key: 'log' } as const, [], { shape: 'log-4' })
+export const totals = atom({ plugin: 'session-panel', key: 'totals' } as const, { tools: 0, skills: 0 }, { shape: 'totals-1' })
 export const tick = atom({ plugin: 'session-panel', key: 'tick' } as const, 0)
 
 export const CALLSIGNS = [
@@ -27,6 +27,7 @@ const MAX_SHIPS = 12
 const MAX_LOG = 60
 const LINGER_MS = 12_000 // how long a formation that is all down stays
 const MISSING_MS = 15_000 // a ship the roster stopped listing is down after this long
+const STALE_CALL_MS = 10 * 60_000 // a call still running after this long never reported its end
 
 export const DEMO = [
   { type: 'Explore', task: '搜索状态栏相关实现', ms: 9_000, status: 'landed' },
@@ -103,7 +104,10 @@ export async function takeOff(
   await update($, ships, list => {
     if (list.some(ship => ship.id === one.id)) {
       return list.map(ship =>
-        ship.id === one.id ? { ...ship, status: 'flying' as const, endedAt: 0, isWaiting: false } : ship,
+        // A new run: its clock, calls and tokens start again.
+        ship.id === one.id
+          ? { ...ship, status: 'flying' as const, startedAt: now, endedAt: 0, isWaiting: false, tools: 0, tokens: 0, last: '' }
+          : ship,
       )
     }
     // Ships down a while make room; one that just landed or was lost stays to be seen.
@@ -152,7 +156,15 @@ export async function step($: EngineInterface) {
     await update($, ships, current => [...advance(current, now)])
   }
   const flying = list.filter(ship => ship.status === 'flying')
-  const isRunning = (await read($, log)).some(entry => entry.status === 'running')
+  const entries = await read($, log)
+  // A call whose end never came (a reload while it ran) does not spin for ever.
+  if (entries.some(entry => entry.status === 'running' && now - entry.startedAt > STALE_CALL_MS)) {
+    await update($, log, all => all.map(entry =>
+      entry.status === 'running' && now - entry.startedAt > STALE_CALL_MS
+        ? { ...entry, status: 'failed' as const, error: '没有收到结束' }
+        : entry))
+  }
+  const isRunning = entries.some(entry => entry.status === 'running' && now - entry.startedAt <= STALE_CALL_MS)
   if (flying.length > 0 || isRunning) await update($, tick, n => (n + 1) % 3600)
   if (flying.length === 0) return
 
@@ -176,7 +188,8 @@ export async function step($: EngineInterface) {
     if (isWaiting !== ship.isWaiting) {
       await update($, ships, list => list.map(one => (one.id === ship.id ? { ...one, isWaiting } : one)))
     }
-    if (agent.status === 'completed') await touchDown($, ship.id, 'landed')
+    // Idle is between turns: a teammate in a pane of its own never ends its turn here.
+    if (agent.status === 'completed' || agent.status === 'idle') await touchDown($, ship.id, 'landed')
     else if (agent.status === 'failed' || agent.status === 'killed') await touchDown($, ship.id, 'lost')
   }
 }
@@ -204,7 +217,7 @@ export async function logSkill($: EngineInterface, skill: string, agentId: strin
   skillCount += 1
   const at = await $.clock.now()
   const owner = await shipOf($, agentId)
-  await addEntry($, { id: `skill-${skillCount}-${at}`, kind: 'skill', label: skill, ...owner, status: 'ok', error: '', source: 'skill' })
+  await addEntry($, { id: `skill-${skillCount}-${at}`, kind: 'skill', label: skill, ...owner, status: 'ok', error: '', source: 'skill', startedAt: at })
 }
 
 /** A ship's tool call: one more on its count, and its latest line. */
@@ -234,7 +247,11 @@ export async function launchDemo($: EngineInterface) {
 /** Clears what is over: ships still in the air and calls still running stay, and so does their count. */
 export async function clearFleet($: EngineInterface) {
   await update($, ships, list => list.filter(ship => ship.status === 'flying' && ship.demoMs === 0))
-  await update($, log, list => list.filter(entry => entry.status === 'running'))
-  const kept = await read($, log)
-  await update($, totals, () => ({ tools: kept.filter(entry => entry.kind === 'tool').length, skills: 0 }))
+  let tools = 0
+  await update($, log, list => {
+    const kept = list.filter(entry => entry.status === 'running')
+    tools = kept.filter(entry => entry.kind === 'tool').length
+    return kept
+  })
+  await update($, totals, () => ({ tools, skills: 0 }))
 }
