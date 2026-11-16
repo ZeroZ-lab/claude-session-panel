@@ -24,6 +24,15 @@ In a Claude Code terminal session:
 
 Answer `y` to add the marketplace, then pick a scope.
 
+If that line is refused (older Claude Code versions have no `--marketplace`), add the marketplace first, then install:
+
+```
+/plugin marketplace add ZeroZ-lab/claude-session-panel
+/plugin install session-panel@claude-session-panel
+```
+
+Or from a shell: `claude plugin marketplace add ZeroZ-lab/claude-session-panel && claude plugin install session-panel@claude-session-panel`. Restart Claude Code afterwards.
+
 **Update:** `claude plugin marketplace update claude-session-panel`, then `claude plugin update session-panel@claude-session-panel`.
 **Uninstall:** `claude plugin uninstall session-panel@claude-session-panel`.
 

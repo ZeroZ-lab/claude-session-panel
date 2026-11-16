@@ -24,6 +24,15 @@ Claude Code 终端里的侧边面板：包含桌面版会话概览的内容，�
 
 提示添加插件源时输入 `y`，再选择安装范围。
 
+如果这一行报错（较早的 Claude Code 版本没有 `--marketplace` 参数），就先添加插件源再安装：
+
+```
+/plugin marketplace add ZeroZ-lab/claude-session-panel
+/plugin install session-panel@claude-session-panel
+```
+
+也可以在终端里运行：`claude plugin marketplace add ZeroZ-lab/claude-session-panel && claude plugin install session-panel@claude-session-panel`。装好后重启 Claude Code。
+
 **更新**：`claude plugin marketplace update claude-session-panel`，再 `claude plugin update session-panel@claude-session-panel`。
 **卸载**：`claude plugin uninstall session-panel@claude-session-panel`。
 
