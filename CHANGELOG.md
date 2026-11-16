@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 — 2026-11-16
+
+**Added**
+- The pane is in English or Chinese. It follows Claude Code's `language` setting when one is set, else the system locale (`LC_ALL`, `LC_MESSAGES`, `LANG`), and is English when neither says Chinese.
+- `/panel zh`, `/panel en` pick the language for this session and later ones; `/panel auto` follows the machine again.
+- `/panel formation` opens the formation page, as `/panel fleet` does.
+
+**Changed**
+- The words of a context event are no longer kept with it, so events already listed change language with the pane.
+- `/panel`'s replies and its description are in the pane's language.
+
+## 0.2.1 — 2026-11-16
+
+**Fixed**
+- Claude Code versions without mods refused to install the plugin (`expected record, received undefined` at `hooks`): `hooks/hooks.json` now carries an empty `hooks` record. Those versions still do not run the mod; the README says to update.
+
 ## 0.2.0 — 2026-11-16
 
 Fixes from a review of 0.1.0.

@@ -40,24 +40,12 @@ export const CHART_ROWS = 6
 // Eighths of a cell, from empty to full, for the tops of the bars.
 export const BLOCKS = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'] as const
 export const EVENT_LOOK = {
-  compact: { glyph: '✂', color: 'success', name: '压缩' },
-  drop: { glyph: '↓', color: 'success', name: '回落' },
-  jump: { glyph: '▲', color: 'warning', name: '突增' },
-  model: { glyph: '⇄', color: 'suggestion', name: '切换模型' },
-  skill: { glyph: '✦', color: 'suggestion', name: '技能' },
+  compact: { glyph: '✂', color: 'success' },
+  drop: { glyph: '↓', color: 'success' },
+  jump: { glyph: '▲', color: 'warning' },
+  model: { glyph: '⇄', color: 'suggestion' },
+  skill: { glyph: '✦', color: 'suggestion' },
 } as const
-// The words /context uses for its rows, in the pane's language.
-export const CATEGORY_NAMES: Record<string, string> = {
-  'Messages': '消息',
-  'System prompt': '系统提示',
-  'System tools': '系统工具',
-  'MCP tools': 'MCP 工具',
-  'MCP server instructions': 'MCP 服务器说明',
-  'Memory files': '记忆文件',
-  'Custom agents': '自定义代理',
-  'Skills': '技能',
-}
-export const LIMIT_NAMES: Record<string, string> = { five_hour: '5 小时限额', seven_day: '7 天限额' }
 // The rows /context lists that the conversation itself fills; every other used row is carried on each request.
 const CONVERSATION_ROWS = new Set(['Messages', 'Summarized conversation', 'Conversation'])
 
@@ -84,7 +72,6 @@ const usedRows = (rows: readonly { name: string; tokens: number; color: string; 
 export const sourceOf = (tool: string): string =>
   tool.startsWith('mcp__') ? `mcp:${tool.split('__')[1] ?? ''}` : tool === 'Skill' ? 'skill' : ''
 
-export const OUTPUT_KINDS = { file: '文件', artifact: '页面', pr: 'PR' } as const
 export const STATUS_COLORS: Record<string, string> = {
   M: 'warning', A: 'success', '?': 'success', D: 'error', R: 'suggestion', U: 'error',
 }
@@ -414,11 +401,12 @@ async function takeReading($: EngineInterface, cause: Cause, withBreakdown: bool
   const change = total - last.total
   if (change < -Math.max(5_000, last.total * 0.3)) {
     // Not a compaction this mod heard of: most likely old tool results cleared, or a /clear.
-    await addEvent($, { at, turn, kind: 'drop', tokens: change, label: '可能清理了旧工具结果', n })
+    await addEvent($, { at, turn, kind: 'drop', tokens: change, label: '', n })
   } else if (change > Math.max(20_000, usage.context.window * 0.04)) {
     await addEvent($, {
       at, turn, kind: 'jump', tokens: change, n,
-      label: cause.label === '' ? '你的输入或回复' : cause.label,
+      // Empty when no call came before it: the person's prompt, or the reply.
+      label: cause.label,
       source: cause.source,
       size: cause.size,
     })
@@ -528,14 +516,12 @@ export async function onTurnEnd($: EngineInterface, model: string) {
 
 export async function onCompacted($: EngineInterface, trigger: string, before?: number, after?: number) {
   isCompactNoted = true
-  const kind = trigger === 'auto' ? '自动' : trigger === 'plugin' ? '插件' : '手动'
   await addEvent($, {
     ...(await eventNow($)),
     kind: 'compact',
     tokens: before !== undefined && after !== undefined ? after - before : 0,
-    label: before !== undefined && after !== undefined
-      ? `${kind} · ${shortTokens(before)} → ${shortTokens(after)}`
-      : kind,
+    trigger: trigger === 'auto' || trigger === 'plugin' ? trigger : 'manual',
+    label: before !== undefined && after !== undefined ? `${shortTokens(before)} → ${shortTokens(after)}` : '',
   })
 }
 

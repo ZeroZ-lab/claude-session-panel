@@ -39,9 +39,10 @@ Or from a shell: `claude plugin marketplace add ZeroZ-lab/claude-session-panel &
 ## Use
 
 - The pane opens beside the chat on its own in the terminal's fullscreen layout (from 144 columns; 110 once you have opened it yourself). Elsewhere, open it with `/panel`.
-- Three pages: **概览 Overview**, **编队 Formation**, **记录 Log**. Focus the pane with `ctrl+x tab`, then press `1` `2` `3`.
+- Three pages: **Overview**, **Formation**, **Log**. Focus the pane with `ctrl+x tab`, then press `1` `2` `3`.
 - With the pane focused, a button with a letter in front of it is pressed by that letter: `d` context detail, `t` trend total/change, `g` trend per request/turn, `a` `x` `s` `m` log filters (all, failed, skills, MCP).
 - `/panel [overview|fleet|log]` (or `概览|编队|记录`) opens a page, `/panel demo` flies a five-ship demo, `/panel clear` clears finished ships and calls.
+- The pane is in English or Chinese. It follows Claude Code's `language` setting when you have set one, else your system locale. `/panel en` or `/panel zh` picks one for this session and later ones; `/panel auto` follows the machine again.
 - Close the pane by hand and it stays closed in later sessions until you run `/panel` again.
 
 ## What it shows
@@ -53,8 +54,6 @@ Or from a shell: `claude plugin marketplace add ZeroZ-lab/claude-session-panel &
 - **Formation**: each running subagent with its task, latest call, tokens and time; ones waiting on you come first.
 - **Log**: tool and skill calls, runs folded (`Read ×5`), filters for failed / skill / MCP, and why each failure failed.
 
-The text of the pane is in Chinese.
-
 ## Privacy
 
 Everything stays on your machine; the mod makes no network calls of its own.
@@ -62,7 +61,8 @@ Everything stays on your machine; the mod makes no network calls of its own.
 - While a surface shows the pane, it runs `git status`, `git diff --numstat` and `git rev-parse` (read only, with `--no-optional-locks`) in the session's folder: every 15 seconds, and soon after an edit. While the pane is hidden, git does not run.
 - It reads the modification time of changed files, to tell this session's changes from earlier ones. It does not read file contents.
 - It watches tool calls in the session to log them, and reads PR links (from `gh pr create`) and artifact links from their results, for the outputs card.
-- It stores one value across sessions: whether you closed the pane by hand.
+- To pick the pane's language it reads Claude Code's `language` setting and the `LC_ALL`, `LC_MESSAGES` and `LANG` variables.
+- It stores two values across sessions: whether you closed the pane by hand, and the language you chose with `/panel en|zh`.
 
 ## Troubleshooting
 

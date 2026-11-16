@@ -39,7 +39,7 @@ export type Entry = {
   /** That ship's number then, for its color; -1 for the main conversation. */
   seq: number
   status: 'running' | 'ok' | 'failed'
-  /** Why it failed, as one short line: the refusal, the error, or the start of the tool's error text. */
+  /** Why it failed, as one short line: the refusal, the error, or the start of the tool's error text; `NO_END` for a call whose end never came. */
   error: string
   /** Where the tool comes from: '' built in, `mcp:<server>` for an MCP server's, `skill` for a skill. */
   source: string
@@ -143,14 +143,20 @@ export type CtxEvent = {
   kind: 'compact' | 'drop' | 'jump' | 'model' | 'skill'
   /** Tokens it added (positive) or took back (negative); 0 when it says nothing of size. */
   tokens: number
+  /** What it was, when that is a name (a call, a skill, a model); empty when the pane has its own words for it. */
   label: string
   /** The reading it shows under, by `n`; none for one the trend does not mark. */
   n?: number
+  /** For a compaction: what started it (`auto`, `plugin`, `manual`); the pane says it in its language. */
+  trigger?: string
   /** For a jump: where the call that brought it in comes from ('' built in, `mcp:<server>`, `skill`). */
   source?: string
   /** For a jump: about how many tokens that call's result held. */
   size?: number
 }
+
+/** The language the pane is drawn in. */
+export type Lang = 'zh' | 'en'
 
 /** The pane's three pages, chosen with its segmented control. */
 export type Page = 'overview' | 'fleet' | 'log'
@@ -159,6 +165,8 @@ declare module 'claude-code' {
   interface PluginState {
     'session-panel': {
       page: Page
+      /** The pane's language: the one chosen with `/panel zh|en`, else the machine's. */
+      lang: Lang
       /** True once the person closed the pane by hand: nothing reopens it unasked. */
       isDismissed: boolean
       /** True while the pane is open because the person asked for it, not because the session started. */

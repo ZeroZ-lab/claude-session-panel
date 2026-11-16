@@ -1,14 +1,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
+import { WORDS } from './i18n'
+
 // The one pane, which of its pages shows, and whether the person wants it.
 
 export const PANE = 'session-panel'
-export const PANE_ARGS = { id: PANE, title: '会话', columns: 46 } as const
+/** What the pane is opened with: its title in the pane's language. */
+export async function paneArgs($: EngineInterface) {
+  return { id: PANE, title: WORDS[await read($, lang)].title, columns: 46 }
+}
 
 export const page = atom({ plugin: 'session-panel', key: 'page' } as const, 'overview')
 export const isDismissed = atom({ plugin: 'session-panel', key: 'isDismissed' } as const, false)
 export const isAsked = atom({ plugin: 'session-panel', key: 'isAsked' } as const, false)
+const lang = atom({ plugin: 'session-panel', key: 'lang' } as const, 'zh')
 
 // Kept in the store, so a pane closed by hand stays closed in later sessions too.
 const DISMISSED_KEY = 'isDismissed'
@@ -34,7 +40,7 @@ export async function showPane($: EngineInterface) {
   try {
     if (await read($, isDismissed)) return
     const panes = await $.ui.panes()
-    if (!panes.some(pane => pane.id === PANE)) await $.ui.open(PANE_ARGS)
+    if (!panes.some(pane => pane.id === PANE)) await $.ui.open(await paneArgs($))
   } catch {
     // The pane is a view: a refused open costs nothing else.
   }

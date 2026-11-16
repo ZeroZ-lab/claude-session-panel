@@ -1,6 +1,6 @@
 {
   "name": "session-panel",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "One pane beside the chat: a session overview with a context trend, the subagent formation and the call log",
   "author": { "name": "ZeroZ-lab", "url": "https://github.com/ZeroZ-lab" },
   "homepage": "https://github.com/ZeroZ-lab/claude-session-panel",

@@ -65,6 +65,10 @@ export const world = (on: On, readings: number[] = [65_000]) => {
   // Where the session runs, and the repository's top folder: a test may start it in a subfolder.
   const place = { root: '/Users/someone/work/app', top: '/Users/someone/work/app' }
   on('session.root', () => ({ value: place.root }))
+  // The machine's language, as its locale says it: a test may set another.
+  const locale = { lang: 'zh_CN.UTF-8' as string | undefined, setting: undefined as string | undefined }
+  on('env.get', (_, e) => ({ value: e.name === 'LANG' ? locale.lang : undefined }))
+  on('settings.read', () => ({ value: locale.setting === undefined ? {} : { language: locale.setting } }) as never)
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.version', () => ({ value: { version: '2.1.325' } }))
   const turns = { turn: 3 }
@@ -136,5 +140,5 @@ export const world = (on: On, readings: number[] = [65_000]) => {
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   // Lets work a call started finish before the next, as the seconds between real requests do.
-  return { clock, seen, roster, turns, place, panes, runs, written, settle: () => clock.advance(0) }
+  return { clock, seen, roster, turns, place, panes, runs, written, locale, settle: () => clock.advance(0) }
 }

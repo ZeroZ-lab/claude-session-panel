@@ -3,36 +3,37 @@ import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { CtxEvent, Entry, Page, Ship } from '../types'
 import {
-  addEntry, callOf, clearFleet, describeCall, finishEntry, launchDemo, logSkill,
+  addEntry, callOf, clearFleet, describeCall, finishEntry, launchDemo, logSkill, NO_END,
   noteShipCall, noteShipUsage, shipOf, SPIN, step, takeOff, tintOf, touchDown,
 } from './fleet'
 import {
-  afterToolCall, beforeToolCall, CATEGORY_NAMES, CHART_ROWS, deltaColumn, EMPTY, EVENT_LOOK,
-  LIMIT_NAMES, onCompacted, onSkillLoaded, onTurnEnd, OUTPUT_KINDS, refreshAll, sourceOf, stackColumn,
-  STATUS_COLORS, tickInfo,
+  afterToolCall, beforeToolCall, CHART_ROWS, deltaColumn, EMPTY, EVENT_LOOK,
+  onCompacted, onSkillLoaded, onTurnEnd, refreshAll, sourceOf, stackColumn, STATUS_COLORS, tickInfo,
 } from './info'
 import type { Cell } from './info'
-import { PANE, PANE_ARGS, restoreDismissal, setDismissed, showPane } from './pane'
+import { chooseLang, LANG_WORDS, restoreLang, WORDS } from './i18n'
+import { PANE, paneArgs, restoreDismissal, setDismissed, showPane } from './pane'
 import { baseName, clockText, dirName, homeShort, levelColor, shortTokens } from './text'
 
 // Session panel: one pane beside the chat, three pages under a segmented
-// control. 概览, the session at a glance (the desktop app's overview, and a
-// trend of the context). 编队, the running subagents as a formation. 记录,
-// the recent tool calls and skills.
+// control. The overview, the session at a glance (the desktop app's overview,
+// and a trend of the context). The formation, the running subagents. The log,
+// the recent tool calls and skills. Its words are in `i18n.ts`, in Chinese and
+// in English.
 //
 // The look is a grouped list: a large title, a quiet caption over each card,
 // labels in the primary text and values in the secondary, and color kept
 // for meaning (green fine, amber close, red over).
 
-const PAGES: readonly { page: Page; name: string; hotkey: string }[] = [
-  { page: 'overview', name: '概览', hotkey: '1' },
-  { page: 'fleet', name: '编队', hotkey: '2' },
-  { page: 'log', name: '记录', hotkey: '3' },
+const PAGES: readonly { page: Page; hotkey: string }[] = [
+  { page: 'overview', hotkey: '1' },
+  { page: 'fleet', hotkey: '2' },
+  { page: 'log', hotkey: '3' },
 ]
 // What `/panel` takes: a page, or what the formation's demo and clean-up were.
 const PAGE_WORDS: Record<string, Page> = {
   'overview': 'overview', '概览': 'overview',
-  'fleet': 'fleet', '编队': 'fleet',
+  'fleet': 'fleet', 'formation': 'fleet', '编队': 'fleet',
   'log': 'log', '记录': 'log',
 }
 
@@ -41,6 +42,7 @@ const PAGE_WORDS: Record<string, Page> = {
 // a shape changed in one file and not here reads as the initial value, which
 // the tests catch, since every page is drawn there from values other files wrote.
 const page = atom({ plugin: 'session-panel', key: 'page' } as const, 'overview')
+const lang = atom({ plugin: 'session-panel', key: 'lang' } as const, 'zh')
 const isDismissed = atom({ plugin: 'session-panel', key: 'isDismissed' } as const, false)
 const isAsked = atom({ plugin: 'session-panel', key: 'isAsked' } as const, false)
 const ships = atom({ plugin: 'session-panel', key: 'ships' } as const, [], { shape: 'ships-2' })
@@ -64,10 +66,10 @@ const isCtxOpen = atom({ plugin: 'session-panel', key: 'isCtxOpen' } as const, f
 const logFilter = atom({ plugin: 'session-panel', key: 'logFilter' } as const, 'all')
 
 const LOG_FILTERS = [
-  { value: 'all', name: '全部', hotkey: 'a' },
-  { value: 'failed', name: '失败', hotkey: 'x' },
-  { value: 'skill', name: '技能', hotkey: 's' },
-  { value: 'mcp', name: 'MCP', hotkey: 'm' },
+  { value: 'all', hotkey: 'a' },
+  { value: 'failed', hotkey: 'x' },
+  { value: 'skill', hotkey: 's' },
+  { value: 'mcp', hotkey: 'm' },
 ] as const
 
 let hasTimers = false
@@ -77,16 +79,18 @@ async function openOn($: EngineInterface, to: Page | undefined) {
   await setDismissed($, false)
   await update($, isAsked, () => true)
   if (to !== undefined) await update($, page, () => to)
-  await $.ui.open(PANE_ARGS).catch(() => {})
+  await $.ui.open(await paneArgs($)).catch(() => {})
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     try {
+      // First, so the command and the pane's title are in the person's language.
+      const words = WORDS[await restoreLang($).catch(() => 'en' as const)]
       await $.command.register({
         name: 'panel',
-        description: 'Open the session panel: overview, subagent formation and call log',
-        argumentHint: '[概览|编队|记录|demo|clear]',
+        description: words.commandDescription,
+        argumentHint: '[overview|fleet|log|demo|clear|zh|en|auto]',
       })
       await restoreDismissal($)
       // A `-p` run or the SDK: nobody looks at a pane, so nothing is drawn or kept up.
@@ -119,20 +123,28 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'panel' }, async ($, e) => {
-    const arg = e.args.trim()
+    const arg = e.args.trim().toLowerCase()
+    const choice = LANG_WORDS[arg]
+    if (choice !== undefined) {
+      const said = WORDS[await chooseLang($, choice)].said.lang
+      // Opened again: the pane's title is in that language too.
+      await openOn($, undefined)
+      return { text: said }
+    }
+    const said = WORDS[await read($, lang)].said
     if (arg === 'demo') {
       await openOn($, 'fleet')
       await launchDemo($)
-      return { text: 'Formation demo: five ships are up for about 25 seconds.' }
+      return { text: said.demo }
     }
     if (arg === 'clear') {
       await openOn($, 'fleet')
       await clearFleet($)
-      return { text: 'Cleared what is over; ships still in the air and calls still running stay.' }
+      return { text: said.cleared }
     }
     await openOn($, PAGE_WORDS[arg])
     void refreshAll($)
-    return { text: 'Session panel opened.' }
+    return { text: said.opened }
   })
 
   on('agent.spawn', async ($, e, next) => {
@@ -243,9 +255,11 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     // Read together; each value read is one this drawing redraws on, so the
     // call log and its counts are read by the log page alone.
-    const [shown, fleet, where, window, tree, asked, now] = await Promise.all([
+    const [shown, fleet, where, window, tree, asked, now, tongue] = await Promise.all([
       read($, page), read($, ships), read($, env), read($, ctx), read($, changes), read($, isAsked), $.clock.now(),
+      read($, lang),
     ])
+    const t = WORDS[tongue]
 
     const up = fleet.filter(ship => ship.status === 'flying').length
     const landed = fleet.filter(ship => ship.status === 'landed').length
@@ -272,14 +286,14 @@ export const register: Register = on => {
     if (isGlance) {
       const parts = [
         where?.branch ? `${where.branch}${isDirty ? '*' : ''}` : project,
-        window ? `上下文 ${Math.round(pct)}%` : '',
+        window ? t.glanceContext(Math.round(pct)) : '',
         window ? `$${window.usd.toFixed(2)}` : '',
-        isDirty ? `${tree.count} 处改动` : '',
-        fleet.length > 0 ? `${up}/${fleet.length} 在飞` : '',
+        isDirty ? t.glanceChanges(tree.count) : '',
+        fleet.length > 0 ? t.glanceFlying(up, fleet.length) : '',
       ].filter(part => part !== '')
       return (
         <Box gap={1}>
-          <Text weight="semibold">会话</Text>
+          <Text weight="semibold">{t.title}</Text>
           {fleet.map(ship => {
             const mark = markOf(ship)
             return <Text color={mark.color}>{mark.glyph}</Text>
@@ -343,7 +357,7 @@ export const register: Register = on => {
       const isOn = one.page === shown
       return (
         <Button key={`page-${one.page}`} plain hotkey={one.hotkey} onPress={() => update($, page, () => one.page)}>
-          <Text weight={isOn ? 'semibold' : 'regular'} dimColor={!isOn}>{one.name}</Text>
+          <Text weight={isOn ? 'semibold' : 'regular'} dimColor={!isOn}>{t.pages[one.page]}</Text>
           {one.page === 'fleet' && up > 0 && <Text color="suggestion">{` ●${up}`}</Text>}
         </Button>
       )
@@ -359,19 +373,19 @@ export const register: Register = on => {
         {e.surface === 'terminal' && (
           <Box justifyContent="center">
             <Text dimColor size="caption">
-              {e.props.isFocused ? '按 1 2 3 切换页面，按钮前的字母是它的键' : 'ctrl+x tab 聚焦面板，再按 1 2 3 切换'}
+              {e.props.isFocused ? t.hintFocused : t.hintUnfocused}
             </Text>
           </Box>
         )}
         {isCompact && (
           <Box justifyContent="center">
-            <Text dimColor size="caption">终端全屏布局下，面板会停靠在对话旁边</Text>
+            <Text dimColor size="caption">{t.hintCompact}</Text>
           </Box>
         )}
       </Box>
     )
 
-    // ---- 概览 ----
+    // ---- The overview ----
 
     const overviewPage = async () => {
       const servers = await read($, connectors)
@@ -422,7 +436,7 @@ export const register: Register = on => {
       )
 
       const context = window === null
-        ? [empty('正在读取…')]
+        ? [empty(t.reading)]
         : [
             <Box justifyContent="space-between">
               <Box gap={1}>
@@ -430,56 +444,56 @@ export const register: Register = on => {
                   {window.tokens === 0 ? '—' : `${Math.round(pct)}%`}
                 </Text>
                 <Text dimColor>
-                  {window.tokens === 0 ? `首个请求后统计 · 窗口 ${shortTokens(window.window)}` : `已用 ${shortTokens(window.tokens)} / ${shortTokens(window.window)}`}
+                  {window.tokens === 0 ? t.beforeFirst(shortTokens(window.window)) : t.used(shortTokens(window.tokens), shortTokens(window.window))}
                 </Text>
               </Box>
               {threshold > 0
-                ? <Text color={nearColor}>{`距压缩 ${shortTokens(toCompact)}`}</Text>
-                : <Text dimColor>自动压缩已关闭</Text>}
+                ? <Text color={nearColor}>{t.toCompact(shortTokens(toCompact))}</Text>
+                : <Text dimColor>{t.compactOff}</Text>}
             </Box>,
             storage,
-            <Text dimColor size="caption">{window.buffer > 0 ? '按输入 token 计 · 虚线段是压缩预留' : '按输入 token 计'}</Text>,
+            <Text dimColor size="caption">{window.buffer > 0 ? t.countedByWithReserve : t.countedBy}</Text>,
             threshold > 0 && nearness >= 0.85 && (
-              <Text color={nearColor}>快到自动压缩了。想保留要点，可以先输入 /compact 并写明要保留什么。</Text>
+              <Text color={nearColor}>{t.nearCompact}</Text>
             ),
             ...window.categories.map(part => (
               <Box justifyContent="space-between">
                 <Box gap={1}>
                   <Text color={part.color}>●</Text>
-                  <Text>{CATEGORY_NAMES[part.name] ?? part.name}</Text>
+                  <Text>{t.categories[part.name] ?? part.name}</Text>
                 </Box>
                 <Text dimColor>{shortTokens(part.tokens)}</Text>
               </Box>
             )),
             window.fixed + window.conversation > 0 && (
               <Box justifyContent="space-between" marginTop={1}>
-                <Text dimColor>{`每次请求固定 ${shortTokens(window.fixed)} · 对话 ${shortTokens(window.conversation)}`}</Text>
-                <Button key="ctx-detail" label={isOpen ? '收起' : '详情'} hotkey="d" plain dimColor onPress={() => update($, isCtxOpen, open => !open)} />
+                <Text dimColor>{t.fixedAndConversation(shortTokens(window.fixed), shortTokens(window.conversation))}</Text>
+                <Button key="ctx-detail" label={isOpen ? t.less : t.detail} hotkey="d" plain dimColor onPress={() => update($, isCtxOpen, open => !open)} />
               </Box>
             ),
             ...(isOpen
               ? [
-                  window.servers.length > 0 && <Text dimColor size="footnote">MCP 服务器的工具说明</Text>,
+                  window.servers.length > 0 && <Text dimColor size="footnote">{t.serverSchemas}</Text>,
                   ...window.servers.map(server => detailRow(server.name, server.tokens)),
-                  window.memory.length > 0 && <Text dimColor size="footnote">记忆文件</Text>,
+                  window.memory.length > 0 && <Text dimColor size="footnote">{t.memoryFiles}</Text>,
                   ...window.memory.map(file => detailRow(file.path, file.tokens, true)),
-                  window.servers.length === 0 && window.memory.length === 0 && empty('没有 MCP 工具或记忆文件占用'),
+                  window.servers.length === 0 && window.memory.length === 0 && empty(t.noDetail),
                 ]
               : []),
             // Plan use and cost, one group under a caption of its own.
             <Box marginTop={1}>
-              <Text dimColor size="footnote">额度</Text>
+              <Text dimColor size="footnote">{t.limits}</Text>
             </Box>,
             ...window.limits.map(limit => (
               <Box justifyContent="space-between">
-                <Text>{LIMIT_NAMES[limit.kind] ?? limit.kind}</Text>
+                <Text>{t.limitNames[limit.kind] ?? limit.kind}</Text>
                 <Box gap={1}>
                   {meter(limit.percent, 8, levelColor(limit.percent))}
                   <Text color={levelColor(limit.percent)}>{`${Math.round(limit.percent)}%`}</Text>
                 </Box>
               </Box>
             )),
-            row('本次花费', `$${window.usd.toFixed(2)}`),
+            row(t.cost, `$${window.usd.toFixed(2)}`),
           ]
 
       // The trend: one bar per request, or per turn (its last reading), newest at the right.
@@ -543,11 +557,11 @@ export const register: Register = on => {
           const by = part.tokens - (lastTurnEnd.parts.find(one => one.name === part.name)?.tokens ?? 0)
           if (by > mostBy) {
             mostBy = by
-            most = CATEGORY_NAMES[part.name] ?? part.name
+            most = t.categories[part.name] ?? part.name
           }
         }
         const sign = change >= 0 ? '+' : '-'
-        return `比上一轮 ${sign}${shortTokens(Math.abs(change))}${most !== '' && change > 0 ? ` · ${most}增长最多` : ''}`
+        return t.growth(`${sign}${shortTokens(Math.abs(change))}`, change > 0 ? most : '')
       })()
 
       /** A switch between two views: the one on in full, the other dim; its letter presses it. */
@@ -561,18 +575,26 @@ export const register: Register = on => {
 
       const sizeOf = (event: CtxEvent) =>
         event.kind === 'model' ? ''
-          : event.tokens < 0 ? `回收 ${shortTokens(-event.tokens)}`
+          : event.tokens < 0 ? t.freed(shortTokens(-event.tokens))
           : event.tokens > 0 ? `${event.kind === 'skill' ? '≈' : ''}+${shortTokens(event.tokens)}`
           : ''
 
+      /** What an event was: its own name, or the pane's words where it kept none. */
+      const labelOf = (event: CtxEvent) =>
+        event.kind === 'compact' ? [t.triggers[event.trigger ?? ''] ?? '', event.label].filter(Boolean).join(' · ')
+          : event.label !== '' ? event.label
+          : event.kind === 'drop' ? t.dropCause
+          : event.kind === 'jump' ? t.jumpCause
+          : ''
+
       const trend = readings.length < 2
-        ? [empty('再发几次请求后，这里会画出上下文的变化。')]
+        ? [empty(t.trendEmpty)]
         : [
             <Box justifyContent="space-between">
-              <Text dimColor>{mode === 'total' ? `最高 ${shortTokens(top)}` : `最大变化 ${shortTokens(biggest)}`}</Text>
+              <Text dimColor>{mode === 'total' ? t.top(shortTokens(top)) : t.maxChange(shortTokens(biggest))}</Text>
               <Box gap={2}>
-                {flip('trend-mode', 't', ['总量', '变化'], mode === 'total', () => update($, trendMode, m => (m === 'total' ? 'delta' : 'total')))}
-                {flip('trend-grain', 'g', ['按请求', '按轮'], grain === 'step', () => update($, trendGrain, g => (g === 'step' ? 'turn' : 'step')))}
+                {flip('trend-mode', 't', t.modes, mode === 'total', () => update($, trendMode, m => (m === 'total' ? 'delta' : 'total')))}
+                {flip('trend-grain', 'g', t.grains, grain === 'step', () => update($, trendGrain, g => (g === 'step' ? 'turn' : 'step')))}
               </Box>
             </Box>,
             ...Array.from({ length: CHART_ROWS }, (_, i) => chartRow(CHART_ROWS - 1 - i)),
@@ -583,29 +605,34 @@ export const register: Register = on => {
               </Box>
             ),
             <Text dimColor wrap="truncate-end">
-              {`${grain === 'step' ? `${readings.length} 次请求` : `${series.length} 轮`} · 现在 ${shortTokens(latest?.total ?? 0)} · 峰值 ${shortTokens(peak)}${hasLine ? ' · ┄ 压缩线' : ''}`}
+              {[
+                grain === 'step' ? t.requests(readings.length) : t.turns(series.length),
+                t.now(shortTokens(latest?.total ?? 0)),
+                t.peak(shortTokens(peak)),
+                hasLine ? t.compactLine : '',
+              ].filter(Boolean).join(' · ')}
             </Text>,
             growth !== '' && <Text dimColor wrap="truncate-end">{growth}</Text>,
             ...(happened.length === 0
               ? []
               : [
                   <Box marginTop={1}>
-                    <Text dimColor size="footnote">事件</Text>
+                    <Text dimColor size="footnote">{t.events}</Text>
                   </Box>,
                   ...[...happened].reverse().slice(0, 3).map(event => {
                     const look = EVENT_LOOK[event.kind]
-                    const note = event.kind === 'jump' && (event.size ?? 0) > 0 ? ` · 结果约 ${shortTokens(event.size ?? 0)}` : ''
+                    const note = event.kind === 'jump' && (event.size ?? 0) > 0 ? ` · ${t.resultSize(shortTokens(event.size ?? 0))}` : ''
                     return (
                       <Box justifyContent="space-between">
                         <Box gap={1} flexShrink={1}>
                           <Text color={look.color}>{look.glyph}</Text>
-                          <Text>{look.name}</Text>
-                          <Text dimColor wrap="truncate-end">{event.label + note}</Text>
+                          <Text>{t.eventNames[event.kind]}</Text>
+                          <Text dimColor wrap="truncate-end">{labelOf(event) + note}</Text>
                           {event.source !== undefined && event.source !== '' && <Text dimColor>{event.source}</Text>}
                         </Box>
                         <Box flexShrink={0} marginLeft={2} gap={1}>
                           {sizeOf(event) !== '' && <Text color={event.tokens < 0 ? 'success' : undefined}>{sizeOf(event)}</Text>}
-                          <Text dimColor>{`第 ${event.turn} 轮`}</Text>
+                          <Text dimColor>{t.turn(event.turn)}</Text>
                         </Box>
                       </Box>
                     )
@@ -615,9 +642,9 @@ export const register: Register = on => {
 
       const shownFiles = tree.files.slice(0, isCompact ? 5 : 10)
       const changed = !tree.isRepo
-        ? [empty('不在 git 仓库中')]
+        ? [empty(t.notRepo)]
         : tree.count === 0
-          ? [empty('工作区是干净的')]
+          ? [empty(t.clean)]
           : [
               ...shownFiles.map(file => (
                 <Box justifyContent="space-between">
@@ -638,70 +665,70 @@ export const register: Register = on => {
                   </Box>
                 </Box>
               )),
-              tree.count > shownFiles.length && empty(`还有 ${tree.count - shownFiles.length} 项`),
+              tree.count > shownFiles.length && empty(t.more(tree.count - shownFiles.length)),
               tree.sessionCount < tree.count && (
                 <Box marginTop={1}>
-                  <Text dimColor size="caption">灰色的是会话开始前就有的改动</Text>
+                  <Text dimColor size="caption">{t.grayNote}</Text>
                 </Box>
               ),
             ]
       const changesNote = !isDirty ? ''
-        : tree.sessionCount === tree.count ? `本次会话 ${tree.count} 项 · +${tree.added} -${tree.removed}`
-        : tree.sessionCount === 0 ? `${tree.count} 项，都在会话开始前`
-        : `本次 ${tree.sessionCount} 项 · 另有 ${tree.count - tree.sessionCount} 项在会话前`
+        : tree.sessionCount === tree.count ? t.changesAllSession(tree.count, tree.added, tree.removed)
+        : tree.sessionCount === 0 ? t.changesAllBefore(tree.count)
+        : t.changesMixed(tree.sessionCount, tree.count - tree.sessionCount)
 
       const produced = made.length === 0
-        ? [empty('本次会话还没有产出')]
+        ? [empty(t.noOutputs)]
         : [...made].reverse().slice(0, 8).map(output => (
             <Box justifyContent="space-between">
               <Box flexShrink={1}>
                 <Text wrap="truncate-start">{output.kind === 'file' ? baseName(output.label) : output.label}</Text>
               </Box>
               <Box flexShrink={0} marginLeft={2}>
-                <Text dimColor>{OUTPUT_KINDS[output.kind]}</Text>
+                <Text dimColor>{t.outputKinds[output.kind]}</Text>
               </Box>
             </Box>
           ))
 
       // They rarely change: one paragraph of names, the counts in the caption.
       const connected = servers.length === 0
-        ? [empty('没有已连接的 MCP 服务器')]
+        ? [empty(t.noConnectors)]
         : [<Text dimColor>{servers.map(server => `${server.name} ${server.tools}`).join(' · ')}</Text>]
       const toolCount = servers.reduce((sum, server) => sum + server.tools, 0)
 
       const environment = where === null
-        ? [empty('正在读取…')]
+        ? [empty(t.reading)]
         : [
-            row('位置', homeShort(where.root)),
+            row(t.rows.root, homeShort(where.root)),
             where.branch !== '' &&
-              row('分支', `${where.branch}${where.ahead > 0 ? ` ↑${where.ahead}` : ''}${where.behind > 0 ? ` ↓${where.behind}` : ''}`),
-            where.remote !== '' && row('远程', where.remote),
-            row('模型', where.model),
-            where.version !== '' && row('版本', where.version),
+              row(t.rows.branch, `${where.branch}${where.ahead > 0 ? ` ↑${where.ahead}` : ''}${where.behind > 0 ? ` ↓${where.behind}` : ''}`),
+            where.remote !== '' && row(t.rows.remote, where.remote),
+            row(t.rows.model, where.model),
+            where.version !== '' && row(t.rows.version, where.version),
           ]
 
       // Above the prompt the page is cut to what matters most: how full the context is, and what changed.
       if (isCompact) {
         return [
-          group('上下文', '', context.slice(0, 2)),
-          group('工作区改动', changesNote, changed),
+          group(t.groups.context, '', context.slice(0, 2)),
+          group(t.groups.changes, changesNote, changed),
         ]
       }
       return [
-        group('上下文', '', context),
-        group('上下文趋势', mode === 'total' ? '每次请求的构成' : '每次请求的变化', trend),
-        group('工作区改动', changesNote, changed),
-        group('产出', made.length > 0 ? `${made.length} 项` : '', produced),
-        group('连接器', servers.length === 0 ? '' : `${servers.length} 个 · ${toolCount} 个工具`, connected),
-        group('环境', '', environment),
+        group(t.groups.context, '', context),
+        group(t.groups.trend, mode === 'total' ? t.trendTotal : t.trendDelta, trend),
+        group(t.groups.changes, changesNote, changed),
+        group(t.groups.outputs, made.length > 0 ? t.outputCount(made.length) : '', produced),
+        group(t.groups.connectors, servers.length === 0 ? '' : t.connectorCount(servers.length, toolCount), connected),
+        group(t.groups.environment, '', environment),
       ]
     }
 
-    // ---- 编队 ----
+    // ---- The formation ----
 
     const fleetPage = () => {
       if (fleet.length === 0) {
-        return [group('子代理', '', [empty('子代理起飞后会出现在这里。输入 /panel demo 预览。')])]
+        return [group(t.groups.subagents, '', [empty(t.fleetEmpty)])]
       }
 
       // Waiting on someone first, then the ones at work, then the ones down.
@@ -741,9 +768,9 @@ export const register: Register = on => {
         const isUp = ship.status === 'flying'
         const time = clockText((isUp ? now : ship.endedAt) - ship.startedAt)
         const spent = ship.tokens > 0 ? `${shortTokens(ship.tokens)} · ` : ''
-        const act = ship.isWaiting ? '等待处理：审批或回答问题'
-          : isUp ? `${spin(i)} ${ship.last === '' ? '起飞中' : ship.last}`
-          : `${ship.status === 'landed' ? '完成' : '出错或中止'} · ${ship.tools} 次调用`
+        const act = ship.isWaiting ? t.waitingLong
+          : isUp ? `${spin(i)} ${ship.last === '' ? t.takingOff : ship.last}`
+          : t.ended(ship.status === 'landed', ship.tools)
         const actColor = ship.isWaiting ? 'warning'
           : ship.status === 'lost' ? 'error' : ship.status === 'landed' ? 'success' : undefined
 
@@ -754,7 +781,7 @@ export const register: Register = on => {
                 <Text color={mark.color}>{mark.glyph}</Text>
                 <Text color={tintOf(ship.seq)} dimColor={!isUp}>{callOf(ship.seq)}</Text>
                 <Text weight={isUp ? 'semibold' : 'regular'} dimColor={!isUp} wrap="truncate-end">
-                  {lines === 1 && ship.isWaiting ? '等待处理' : ship.task}
+                  {lines === 1 && ship.isWaiting ? t.waiting : ship.task}
                 </Text>
               </Box>
               <Box flexShrink={0} marginLeft={2}>
@@ -779,9 +806,9 @@ export const register: Register = on => {
       const sections: { name: string; ships: Ship[] }[] = fleet.length < 4
         ? [{ name: '', ships: ordered }]
         : [
-            { name: '需要处理', ships: ordered.filter(ship => rank(ship) === 0) },
-            { name: '运行中', ships: ordered.filter(ship => rank(ship) === 1) },
-            { name: '已结束', ships: ordered.filter(ship => rank(ship) === 2) },
+            { name: t.sections.waiting, ships: ordered.filter(ship => rank(ship) === 0) },
+            { name: t.sections.running, ships: ordered.filter(ship => rank(ship) === 1) },
+            { name: t.sections.over, ships: ordered.filter(ship => rank(ship) === 2) },
           ].filter(section => section.ships.length > 0)
       let index = 0
       const cards = sections.flatMap(section => [
@@ -794,17 +821,17 @@ export const register: Register = on => {
       ])
 
       const summary = [
-        waiting > 0 ? `${waiting} 等待处理` : '',
+        waiting > 0 ? t.sumWaiting(waiting) : '',
         // The ones waiting are counted once, as waiting.
-        up - waiting > 0 ? `${up - waiting} 执行中` : '',
-        landed > 0 ? `${landed} 完成` : '',
-        lost > 0 ? `${lost} 出错` : '',
+        up - waiting > 0 ? t.sumRunning(up - waiting) : '',
+        landed > 0 ? t.sumLanded(landed) : '',
+        lost > 0 ? t.sumLost(lost) : '',
       ].filter(Boolean).join(' · ')
 
-      return [group('子代理', summary, [wedge, ...cards])]
+      return [group(t.groups.subagents, summary, [wedge, ...cards])]
     }
 
-    // ---- 记录 ----
+    // ---- The log ----
 
     const logPage = async () => {
       const [filter, entries, sums] = await Promise.all([read($, logFilter), read($, log), read($, totals)])
@@ -836,7 +863,7 @@ export const register: Register = on => {
           {LOG_FILTERS.map(one => (
             <Button
               key={`filter-${one.value}`}
-              label={one.name}
+              label={t.filters[one.value]}
               hotkey={one.hotkey}
               plain
               dimColor={filter !== one.value}
@@ -847,7 +874,7 @@ export const register: Register = on => {
       )
 
       const calls = shownRows.length === 0
-        ? [empty(filter === 'all' ? '还没有调用' : '没有符合条件的调用')]
+        ? [empty(filter === 'all' ? t.noCalls : t.noMatch)]
         : shownRows.map(({ entry, count }, i) => {
             const isSkill = entry.kind === 'skill'
             const mark = isSkill
@@ -859,7 +886,7 @@ export const register: Register = on => {
                   : { glyph: '✕', color: 'error' }
             const isQuiet = !isSkill && entry.status === 'ok'
             const label = count > 1 ? `${entry.label.split(' ')[0] ?? entry.label} ×${count}` : entry.label
-            const tag = isSkill ? '技能' : entry.source
+            const tag = isSkill ? t.skillTag : entry.source
 
             return (
               <Box flexDirection="column">
@@ -877,20 +904,20 @@ export const register: Register = on => {
                 </Box>
                 {entry.status === 'failed' && entry.error !== '' && (
                   <Box paddingLeft={2}>
-                    <Text color="error" dimColor wrap="truncate-end">{entry.error}</Text>
+                    <Text color="error" dimColor wrap="truncate-end">{entry.error === NO_END ? t.noEnd : entry.error}</Text>
                   </Box>
                 )}
               </Box>
             )
           })
-      return [group('调用记录', `工具 ${sums.tools} · 技能 ${sums.skills}`, [filters, ...calls])]
+      return [group(t.groups.calls, t.callTotals(sums.tools, sums.skills), [filters, ...calls])]
     }
 
     const body = shown === 'overview' ? await overviewPage() : shown === 'fleet' ? fleetPage() : await logPage()
 
     return (
       <Box flexDirection="column" paddingX={1}>
-        <Text weight="bold" size="title">会话</Text>
+        <Text weight="bold" size="title">{t.title}</Text>
         <Text dimColor size="footnote">
           {[project, where?.branch ? `${where.branch}${isDirty ? '*' : ''}` : ''].filter(Boolean).join(' · ') || ' '}
         </Text>

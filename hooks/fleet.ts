@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
 import type { Entry, Ship, ShipStatus } from '../types'
+import { WORDS } from './i18n'
 import { clip } from './text'
 
 // The formation: every running subagent is a ship that takes off at
@@ -12,6 +13,7 @@ export const ships = atom({ plugin: 'session-panel', key: 'ships' } as const, []
 export const log = atom({ plugin: 'session-panel', key: 'log' } as const, [], { shape: 'log-4' })
 export const totals = atom({ plugin: 'session-panel', key: 'totals' } as const, { tools: 0, skills: 0 }, { shape: 'totals-1' })
 export const tick = atom({ plugin: 'session-panel', key: 'tick' } as const, 0)
+const lang = atom({ plugin: 'session-panel', key: 'lang' } as const, 'zh')
 
 export const CALLSIGNS = [
   'Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot',
@@ -28,13 +30,15 @@ const MAX_LOG = 60
 const LINGER_MS = 12_000 // how long a formation that is all down stays
 const MISSING_MS = 15_000 // a ship the roster stopped listing is down after this long
 const STALE_CALL_MS = 10 * 60_000 // a call still running after this long never reported its end
+/** The reason kept for such a call: no words, so the pane says it in its language. */
+export const NO_END = '@no-end'
 
 export const DEMO = [
-  { type: 'Explore', task: '搜索状态栏相关实现', ms: 9_000, status: 'landed' },
-  { type: 'Plan', task: '设计编队面板的布局', ms: 15_000, status: 'landed' },
-  { type: 'general-purpose', task: '核对 API 字段与文档', ms: 12_000, status: 'lost' },
-  { type: 'code-reviewer', task: '审查改动并找潜在问题', ms: 19_000, status: 'landed' },
-  { type: 'Explore', task: '统计各模块的测试覆盖', ms: 23_000, status: 'landed' },
+  { type: 'Explore', ms: 9_000, status: 'landed' },
+  { type: 'Plan', ms: 15_000, status: 'landed' },
+  { type: 'general-purpose', ms: 12_000, status: 'lost' },
+  { type: 'code-reviewer', ms: 19_000, status: 'landed' },
+  { type: 'Explore', ms: 23_000, status: 'landed' },
 ] as const
 const DEMO_ACTS = [
   'Grep statusLine', 'Read register.tsx', 'Bash git log --oneline',
@@ -161,7 +165,7 @@ export async function step($: EngineInterface) {
   if (entries.some(entry => entry.status === 'running' && now - entry.startedAt > STALE_CALL_MS)) {
     await update($, log, all => all.map(entry =>
       entry.status === 'running' && now - entry.startedAt > STALE_CALL_MS
-        ? { ...entry, status: 'failed' as const, error: '没有收到结束' }
+        ? { ...entry, status: 'failed' as const, error: NO_END }
         : entry))
   }
   const isRunning = entries.some(entry => entry.status === 'running' && now - entry.startedAt <= STALE_CALL_MS)
@@ -239,8 +243,10 @@ export async function noteShipUsage($: EngineInterface, agentId: string, tokens:
 
 export async function launchDemo($: EngineInterface) {
   await update($, ships, list => list.filter(ship => ship.demoMs === 0))
+  // Each ship's task, in the pane's language as the demo starts.
+  const tasks = WORDS[await read($, lang)].demoTasks
   for (const [i, script] of DEMO.entries()) {
-    await takeOff($, { id: `demo-${i}`, type: script.type, task: script.task, demoMs: script.ms }, true)
+    await takeOff($, { id: `demo-${i}`, type: script.type, task: tasks[i] ?? script.type, demoMs: script.ms }, true)
   }
 }
 
