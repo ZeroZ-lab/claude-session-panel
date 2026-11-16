@@ -66,6 +66,7 @@ Everything stays on your machine; the mod makes no network calls of its own.
 
 ## Troubleshooting
 
+- **`Invalid input: expected record, received undefined` at `hooks` while installing**, or the pane never appears: your Claude Code predates mods. Run `claude update`, restart, and install again.
 - **The pane does not appear.** Make the terminal wider (144 columns for a pane that opens on its own), or run `/panel`. If you closed it by hand earlier, `/panel` brings it back.
 - **Something looks wrong.** Start Claude Code with `claude --debug`: the debug log has a line for every hook of the mod that failed.
 - **In `-p` runs and the SDK** the mod does nothing: there is no pane to draw.

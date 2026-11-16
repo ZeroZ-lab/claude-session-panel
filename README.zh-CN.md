@@ -64,6 +64,7 @@ Claude Code 终端里的侧边面板：包含桌面版会话概览的内容，�
 
 ## 常见问题
 
+- **安装时报 `Invalid input: expected record, received undefined`（位置是 `hooks`）**，或者装好了面板始终不出现：你的 Claude Code 版本还不支持 mod。运行 `claude update` 更新、重启后再装。
 - **面板没出现**：把终端拉宽（自动打开需要 144 列），或者输入 `/panel`。如果之前手动关过，`/panel` 可以恢复。
 - **显示不对**：用 `claude --debug` 启动，调试日志里每个出错的 hook 都有一行记录。
 - **`-p` 和 SDK 运行时** mod 什么都不做，因为没有面板可画。
